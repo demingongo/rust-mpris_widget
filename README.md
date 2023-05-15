@@ -1,0 +1,1 @@
+# rust-mpris_widget
