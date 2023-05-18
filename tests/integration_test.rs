@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn select_player_command() {
         let action: String = String::from("select");
-        let player = String::from("spotify");
+        let player = String::from("musikcube");
 
         let result = do_action(&action, &player);
 

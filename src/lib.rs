@@ -141,7 +141,7 @@ fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
     Ok(receiver)
 }
 
-async fn fetch_data(resp: &mut String) -> Result<Option<i32>, Box<dyn Error>> {
+async fn fetch_data(selected_player: &mut String, resp: &mut String) -> Result<Option<i32>, Box<dyn Error>> {
     let cmd_path =
         env::var("PLAYERS_METADATA_PATH").unwrap_or_else(|_| String::from(LIST_PLAYERS_CMD));
     let output = Command::new("sh").arg("-c").arg(cmd_path).output()?;
@@ -181,15 +181,22 @@ async fn fetch_data(resp: &mut String) -> Result<Option<i32>, Box<dyn Error>> {
             },
         );
 
-        first_display = formatted_data.get_display();
-        first_player = Some(formatted_data);
-        break;
+        let is_selected_player = formatted_data.player.eq(selected_player);
+
+        if is_selected_player || first_player.is_none() {
+            first_display = formatted_data.get_display();
+            first_player = Some(formatted_data);
+            if is_selected_player {
+                break;
+            }
+        }
     }
 
     if resp.as_str() != first_display.as_str() {
         // change resp by value of first_display
         *resp = first_display;
         if let Some(value) = first_player {
+            *selected_player = String::from(value.player.as_str());
             println!(
                 "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\"}}",
                 resp, value.player, value.player
@@ -251,6 +258,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
         let ctrl_c_events = ctrl_channel()?;
         let ticks = tick(Duration::from_secs(1));
         let mut current_display = String::new();
+        let mut current_player: String = String::new();
 
         let (tx, rx): (std::sync::mpsc::Sender<String>, std::sync::mpsc::Receiver<String>) = std::sync::mpsc::channel();
 
@@ -307,11 +315,12 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                     match rx.try_recv() {
                         Ok(player_name) => {
                             // TODO: change player to display
-                            println!("supposed to change to {player_name}")
+                            println!("supposed to change to {player_name}");
+                            current_player = player_name;
                         }
                         Err(_) => {}
                     }
-                    let code: Option<i32> = fetch_data(&mut current_display).await?;
+                    let code: Option<i32> = fetch_data(&mut current_player, &mut current_display).await?;
                     if code != Some(0) {
                         break;
                     }
