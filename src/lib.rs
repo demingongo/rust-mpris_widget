@@ -1,15 +1,47 @@
 use crossbeam_channel::{bounded, select, tick, Receiver};
-use std::{env, error::Error, process::Command};
+use std::{env, error::Error, process::Command, os::unix::net::{UnixStream, UnixListener}, thread, io::Write};
 use tokio::time::Duration;
 
 const LIST_PLAYERS_CMD: &str =
     "~/Documents/Github/awesomewm-mpris-widget/bin/list_players_metadata";
+
+const SOCK_PATH: &str = "/tmp/mpris_widget.sock";
 
 #[derive(Debug)]
 enum State {
     Playing,
     Paused,
     Stopped,
+}
+
+#[derive(Debug)]
+pub struct StreamMessage {
+    action: String,
+    player: String,
+}
+
+impl StreamMessage {
+    pub fn build(message: String) -> Result<StreamMessage, &'static str> {
+
+        let split_message = message.split(" ");
+
+        let it: Vec<_> = split_message.collect();
+
+        let action = match it.get(0) {
+            Some(v) => String::from(*v),
+            None => String::new()
+        };
+        let player = match it.get(1) {
+            Some(v) => String::from(*v),
+            None => String::new()
+        };
+
+        Ok(StreamMessage { action, player })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.action.is_empty()
+    }
 }
 
 pub struct Config {
@@ -176,6 +208,9 @@ pub fn do_action(action_name: &String, player: &String) -> Result<(), Box<dyn Er
             return Err("'select' command needs another argument (name of the player)".into());
         }
         // TODO: write the selected player into a file (somewhere where the loop process can access the info)
+        let mut stream = UnixStream::connect(SOCK_PATH)?;
+        let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
+        stream.write_all(message.as_slice())?;
     } else {
         let cmd_path = env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"));
         let mut binding = Command::new(cmd_path);
@@ -197,13 +232,18 @@ pub fn do_action(action_name: &String, player: &String) -> Result<(), Box<dyn Er
     Ok(())
 }
 
-//fn handle_client(mut stream: UnixStream) {
-//    let mut buf = [0; 1024];
-//    println!("thread handle_client read");
-//    let count = stream.read(&mut buf).unwrap();
-//    let response = String::from_utf8(buf[..count].to_vec()).unwrap();
-//    println!("Response: {response}");
-//}
+fn parse_stream_message(mut stream: UnixStream) -> Option<StreamMessage> {
+    let mut buf = [0; 1024];
+    println!("thread handle_client read");
+    let count = std::io::Read::read(&mut stream, &mut buf).unwrap();
+    let response = String::from_utf8(buf[..count].to_vec()).unwrap();
+    println!("Response: {response}");
+
+    match StreamMessage::build(response) {
+        Ok(result) => Some(result),
+        _ => None
+    }
+}
 
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
@@ -212,42 +252,93 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     } else {
         let ctrl_c_events = ctrl_channel()?;
         let ticks = tick(Duration::from_secs(1));
-        let mut current_display = String::from("");
+        let mut current_display = String::new();
 
-        //thread::spawn(|| {
-        //    println!("thread");
-        //    // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
-        //    let listener = match UnixListener::bind("/tmp/mprisw_sock") {
-        //        Ok(sock) => {
-        //            if let Ok(Some(err)) = sock.take_error() {
-        //                println!("Got listener error: {err:?}");
-        //            }
-        //            println!("Got sock 1");
-        //            Some(sock)
-        //        }
-        //        err => {
-        //            println!("Got listener error: {err:?}");
-        //            None
-        //        },
-        //    };
-        //
-        //    if let Some(sock) = listener {
-        //        println!("Got sock 2");
-        //        for stream in sock.incoming() {
-        //            match stream {
-        //                Ok(stream) => {
-        //                    println!("thread received stream");
-        //                    thread::spawn(|| handle_client(stream));
-        //                }
-        //                Err(err) => {
-        //                    println!("Got socket error: {err:?}");
-        //                    break;
-        //                }
-        //            }
-        //        }
-        //    }
-        //    println!("thread done");
-        //});
+        //let mut update_current_display = move |v: &String| {
+        //    current_display.push_str("string");
+        //};
+
+        //let (tx, rx): (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>) = std::sync::mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            println!("thread");
+            // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
+            let listener = match UnixListener::bind(SOCK_PATH) {
+                Ok(sock) => {
+                    if let Ok(Some(err)) = sock.take_error() {
+                        println!("Got listener error: {err:?}");
+                    }
+                    println!("Got sock 1");
+                    Some(sock)
+                }
+                err => {
+                    println!("Got listener error: {err:?}");
+                    None
+                },
+            };
+        
+            if let Some(sock) = listener {
+                println!("Got sock 2");
+
+                //let handle2 = thread::spawn(move || {
+                //    let signal_ticks = tick(Duration::from_secs(1));
+                //    loop {
+                //        select! {
+                //            recv(signal_ticks) -> _ => {
+                //                match rx.try_recv() {
+                //                    Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                //                        println!("got signal, terminating");
+                //                        std::fs::remove_file(SOCK_PATH).unwrap();
+                //                        break;
+                //                    }
+                //                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                //                        //println!("waiting for signal");
+                //                    }
+                //                }
+                //            }
+                //        }
+                //    }
+                //    println!("thread done 2.1")
+                //});
+
+                // listen to incoming streams (clients)
+                for stream in sock.incoming() {
+                    println!("hello stream");
+                    match stream {
+                        Ok(stream) => {
+                            println!("thread received stream");
+                            let message = parse_stream_message(stream);
+                            
+                            if let Some(stream_message) = message {
+                                // do something
+                                println!("stream_message: {stream_message:?}");
+                                if stream_message.is_empty() {
+                                    println!("we are done here (stream message is empty)");
+                                    break;
+                                } else if stream_message.action.eq("select") {
+                                    // TODO: how to update var in another thread without moving it
+                                    //current_display.push_str(stream_message.player.as_str());
+                                    //update_current_display(&String::from(""));
+                                }
+                            } else {
+                                println!("we are done here");
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            println!("Got socket error: {err:?}");
+                            break;
+                        }
+                    }
+                }
+
+                println!("ending sock incoming");
+                //handle2.join().unwrap()
+            }
+            
+            std::fs::remove_file(SOCK_PATH).unwrap();
+            println!("thread done 2");
+        });
 
         loop {
             select! {
@@ -259,11 +350,17 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                 }
                 recv(ctrl_c_events) -> _ => {
                     // quit
+                    //let _ = tx.send(());
+                    let mut stream_to_end = UnixStream::connect(SOCK_PATH)?;
+                    stream_to_end.write_all(b"")?;
                     println!();
+                    //thread::sleep(Duration::from_millis(1500));
                     break;
                 }
             }
         }
+
+        handle.join().unwrap();
     }
 
     Ok(())

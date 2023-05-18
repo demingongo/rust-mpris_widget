@@ -27,4 +27,16 @@ mod tests {
             assert!(false, "'do_action' error: {}", error);
         }
     }
+
+    #[test]
+    fn select_player_command() {
+        let action: String = String::from("select");
+        let player = String::from("spotify");
+
+        let result = do_action(&action, &player);
+
+        if let Err(error) = result {
+            assert!(false, "'do_action' error: {}", error);
+        }
+    }
 }
