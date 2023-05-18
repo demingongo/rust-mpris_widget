@@ -234,10 +234,8 @@ pub fn do_action(action_name: &String, player: &String) -> Result<(), Box<dyn Er
 
 fn parse_stream_message(mut stream: UnixStream) -> Option<StreamMessage> {
     let mut buf = [0; 1024];
-    println!("thread handle_client read");
     let count = std::io::Read::read(&mut stream, &mut buf).unwrap();
     let response = String::from_utf8(buf[..count].to_vec()).unwrap();
-    println!("Response: {response}");
 
     match StreamMessage::build(response) {
         Ok(result) => Some(result),
@@ -254,95 +252,65 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
         let ticks = tick(Duration::from_secs(1));
         let mut current_display = String::new();
 
-        //let mut update_current_display = move |v: &String| {
-        //    current_display.push_str("string");
-        //};
-
-        //let (tx, rx): (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>) = std::sync::mpsc::channel();
+        let (tx, rx): (std::sync::mpsc::Sender<String>, std::sync::mpsc::Receiver<String>) = std::sync::mpsc::channel();
 
         let handle = thread::spawn(move || {
-            println!("thread");
             // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
             let listener = match UnixListener::bind(SOCK_PATH) {
                 Ok(sock) => {
                     if let Ok(Some(err)) = sock.take_error() {
-                        println!("Got listener error: {err:?}");
+                        eprintln!("Got listener error: {err:?}");
                     }
-                    println!("Got sock 1");
                     Some(sock)
                 }
                 err => {
-                    println!("Got listener error: {err:?}");
+                    eprintln!("Got listener error: {err:?}");
                     None
                 },
             };
         
             if let Some(sock) = listener {
-                println!("Got sock 2");
-
-                //let handle2 = thread::spawn(move || {
-                //    let signal_ticks = tick(Duration::from_secs(1));
-                //    loop {
-                //        select! {
-                //            recv(signal_ticks) -> _ => {
-                //                match rx.try_recv() {
-                //                    Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                //                        println!("got signal, terminating");
-                //                        std::fs::remove_file(SOCK_PATH).unwrap();
-                //                        break;
-                //                    }
-                //                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                //                        //println!("waiting for signal");
-                //                    }
-                //                }
-                //            }
-                //        }
-                //    }
-                //    println!("thread done 2.1")
-                //});
-
                 // listen to incoming streams (clients)
                 for stream in sock.incoming() {
-                    println!("hello stream");
                     match stream {
                         Ok(stream) => {
-                            println!("thread received stream");
                             let message = parse_stream_message(stream);
                             
                             if let Some(stream_message) = message {
                                 // do something
-                                println!("stream_message: {stream_message:?}");
                                 if stream_message.is_empty() {
-                                    println!("we are done here (stream message is empty)");
+                                    //println!("we are done here (stream message is empty)");
                                     break;
                                 } else if stream_message.action.eq("select") {
-                                    // TODO: how to update var in another thread without moving it
-                                    //current_display.push_str(stream_message.player.as_str());
-                                    //update_current_display(&String::from(""));
+                                    let _ = tx.send(stream_message.player);
                                 }
                             } else {
-                                println!("we are done here");
+                                //println!("we are done here");
                                 break;
                             }
                         }
                         Err(err) => {
-                            println!("Got socket error: {err:?}");
+                            eprintln!("Got socket error: {err:?}");
                             break;
                         }
                     }
                 }
-
-                println!("ending sock incoming");
-                //handle2.join().unwrap()
             }
             
             std::fs::remove_file(SOCK_PATH).unwrap();
-            println!("thread done 2");
+            //println!("thread done (unix listener)");
         });
 
         loop {
             select! {
                 recv(ticks) -> _ => {
+                    match rx.try_recv() {
+                        Ok(player_name) => {
+                            // TODO: change player to display
+                            println!("supposed to change to {player_name}")
+                        }
+                        Err(_) => {}
+                    }
                     let code: Option<i32> = fetch_data(&mut current_display).await?;
                     if code != Some(0) {
                         break;
@@ -350,11 +318,9 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                 }
                 recv(ctrl_c_events) -> _ => {
                     // quit
-                    //let _ = tx.send(());
                     let mut stream_to_end = UnixStream::connect(SOCK_PATH)?;
                     stream_to_end.write_all(b"")?;
                     println!();
-                    //thread::sleep(Duration::from_millis(1500));
                     break;
                 }
             }
