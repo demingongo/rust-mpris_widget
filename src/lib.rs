@@ -104,7 +104,7 @@ impl PlayerMetadata {
 
             separator: String::from(" - "),
             state_paused: String::from(" "),
-            state_playing: String::from("󰝚 "),
+            state_playing: String::from(""),
             state_stopped: String::from(" "),
         }
     }
@@ -366,8 +366,8 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                             println!("{}", current_display);
                         } else {
                             println!(
-                                "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\"}}",
-                                current_display, current_player, current_player
+                                "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
+                                current_display, current_player, current_player, current_player, current_display
                             );
                         }
                     }
