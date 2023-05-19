@@ -141,7 +141,7 @@ fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
     Ok(receiver)
 }
 
-async fn fetch_data(selected_player: &mut String, resp: &mut String) -> Result<Option<i32>, Box<dyn Error>> {
+async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<PlayerMetadata>, String), Box<dyn Error>> {
     let cmd_path =
         env::var("PLAYERS_METADATA_PATH").unwrap_or_else(|_| String::from(LIST_PLAYERS_CMD));
     let output = Command::new("sh").arg("-c").arg(cmd_path).output()?;
@@ -192,21 +192,13 @@ async fn fetch_data(selected_player: &mut String, resp: &mut String) -> Result<O
         }
     }
 
-    if resp.as_str() != first_display.as_str() {
-        // change resp by value of first_display
-        *resp = first_display;
-        if let Some(value) = first_player {
-            *selected_player = String::from(value.player.as_str());
-            println!(
-                "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\"}}",
-                resp, value.player, value.player
-            );
-        } else {
-            println!("{}", resp);
-        }
-    }
+    Ok((output.status.code(), first_player, first_display))
+}
 
-    Ok(output.status.code())
+fn send_message_to_stream(message: &[u8]) -> Result<(), Box<dyn Error>> {
+    let mut stream = UnixStream::connect(SOCK_PATH)?;
+    stream.write_all(message)?;
+    Ok(())
 }
 
 pub fn do_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
@@ -214,10 +206,9 @@ pub fn do_action(action_name: &String, player: &String) -> Result<(), Box<dyn Er
         if player.is_empty() {
             return Err("'select' command needs another argument (name of the player)".into());
         }
-        // TODO: write the selected player into a file (somewhere where the loop process can access the info)
-        let mut stream = UnixStream::connect(SOCK_PATH)?;
+        // send message to select a player on the server
         let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
-        stream.write_all(message.as_slice())?;
+        send_message_to_stream(message.as_slice())?;
     } else {
         let cmd_path = env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"));
         let mut binding = Command::new(cmd_path);
@@ -280,6 +271,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
             if let Some(sock) = listener {
                 // listen to incoming streams (clients)
                 for stream in sock.incoming() {
+                    //println!("incoming stream");
                     match stream {
                         Ok(stream) => {
                             let message = parse_stream_message(stream);
@@ -287,13 +279,14 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                             if let Some(stream_message) = message {
                                 // do something
                                 if stream_message.is_empty() {
-                                    //println!("we are done here (stream message is empty)");
+                                    // message is empty so we are done here
                                     break;
                                 } else if stream_message.action.eq("select") {
+                                    // send info to main thread
                                     let _ = tx.send(stream_message.player);
                                 }
                             } else {
-                                //println!("we are done here");
+                                // we are done here
                                 break;
                             }
                         }
@@ -306,7 +299,6 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
             }
             
             std::fs::remove_file(SOCK_PATH).unwrap();
-            //println!("thread done (unix listener)");
         });
 
         loop {
@@ -314,26 +306,58 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                 recv(ticks) -> _ => {
                     match rx.try_recv() {
                         Ok(player_name) => {
-                            // TODO: change player to display
-                            println!("supposed to change to {player_name}");
+                            // changing player
                             current_player = player_name;
                         }
                         Err(_) => {}
                     }
-                    let code: Option<i32> = fetch_data(&mut current_player, &mut current_display).await?;
+
+                    // fetch data
+                    let (code, metadata, text) = fetch_data(& current_player).await?;
+
+                    // something happened while trying to fetch data
                     if code != Some(0) {
                         break;
+                    }
+
+                    let mut it_should_print = false;
+
+                    // text to display
+                    if !current_display.eq(&text) {
+                        current_display = text;
+                        it_should_print = true;
+                    }
+
+                    // player to display/control
+                    if let Some(value) = metadata {
+                        if !current_player.eq(&value.player) {
+                            current_player = value.player;
+                            it_should_print = true;
+                        }
+                    }
+
+                    // print
+                    if it_should_print {
+                        if current_display.is_empty() {
+                            println!("{}", current_display);
+                        } else {
+                            println!(
+                                "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\"}}",
+                                current_display, current_player, current_player
+                            );
+                        }
                     }
                 }
                 recv(ctrl_c_events) -> _ => {
                     // quit
-                    let mut stream_to_end = UnixStream::connect(SOCK_PATH)?;
-                    stream_to_end.write_all(b"")?;
                     println!();
                     break;
                 }
             }
         }
+
+        // send message to stop server
+        send_message_to_stream(b" ")?;
 
         handle.join().unwrap();
     }
