@@ -1,5 +1,5 @@
 use crossbeam_channel::{bounded, select, tick, Receiver};
-use std::{env, error::Error, process::Command, os::unix::net::{UnixStream, UnixListener}, thread, io::Write};
+use std::{env, error::Error, process::Command, os::unix::net::{UnixStream, UnixListener}, thread::{self, JoinHandle}, io::Write};
 use tokio::time::Duration;
 
 const LIST_PLAYERS_CMD: &str =
@@ -195,7 +195,7 @@ async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<Pla
     Ok((output.status.code(), first_player, first_display))
 }
 
-fn send_message_to_stream(message: &[u8]) -> Result<(), Box<dyn Error>> {
+fn send_message_to_server(message: &[u8]) -> Result<(), Box<dyn Error>> {
     let mut stream = UnixStream::connect(SOCK_PATH)?;
     stream.write_all(message)?;
     Ok(())
@@ -229,11 +229,11 @@ pub fn send_action(action_name: &String, player: &String) -> Result<(), Box<dyn 
         }
         // send message to select a player on the server
         let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
-        send_message_to_stream(message.as_slice())?;
+        send_message_to_server(message.as_slice())?;
     } else {
         // try to send message to server
         let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
-        let result = send_message_to_stream(message.as_slice());
+        let result = send_message_to_server(message.as_slice());
 
         // fallback, execute the action
         if let Err(_) = result {
@@ -255,6 +255,55 @@ fn parse_stream_message(mut stream: UnixStream) -> Option<StreamMessage> {
     }
 }
 
+fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
+        let listener = match UnixListener::bind(SOCK_PATH) {
+            Ok(sock) => {
+                if let Ok(Some(err)) = sock.take_error() {
+                    eprintln!("Got listener error: {err:?}");
+                }
+                Some(sock)
+            }
+            err => {
+                eprintln!("Got listener error: {err:?}");
+                None
+            },
+        };
+    
+        if let Some(sock) = listener {
+            // listen to incoming streams (clients)
+            for stream in sock.incoming() {
+                //println!("incoming stream");
+                match stream {
+                    Ok(stream) => {
+                        let message = parse_stream_message(stream);
+                        
+                        if let Some(stream_message) = message {
+                            // do something
+                            if stream_message.is_empty() {
+                                // message is empty so we are done here
+                                break;
+                            }
+                            // send info to main thread
+                            let _ = tx.send(stream_message);
+                        } else {
+                            // we are done here
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("Got socket error: {err:?}");
+                        break;
+                    }
+                }
+            }
+        }
+        
+        std::fs::remove_file(SOCK_PATH).unwrap();
+    })
+}
+
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
         // do action
@@ -267,52 +316,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
         let (tx, rx): (std::sync::mpsc::Sender<StreamMessage>, std::sync::mpsc::Receiver<StreamMessage>) = std::sync::mpsc::channel();
 
-        let handle = thread::spawn(move || {
-            // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
-            let listener = match UnixListener::bind(SOCK_PATH) {
-                Ok(sock) => {
-                    if let Ok(Some(err)) = sock.take_error() {
-                        eprintln!("Got listener error: {err:?}");
-                    }
-                    Some(sock)
-                }
-                err => {
-                    eprintln!("Got listener error: {err:?}");
-                    None
-                },
-            };
-        
-            if let Some(sock) = listener {
-                // listen to incoming streams (clients)
-                for stream in sock.incoming() {
-                    //println!("incoming stream");
-                    match stream {
-                        Ok(stream) => {
-                            let message = parse_stream_message(stream);
-                            
-                            if let Some(stream_message) = message {
-                                // do something
-                                if stream_message.is_empty() {
-                                    // message is empty so we are done here
-                                    break;
-                                }
-                                // send info to main thread
-                                let _ = tx.send(stream_message);
-                            } else {
-                                // we are done here
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("Got socket error: {err:?}");
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            std::fs::remove_file(SOCK_PATH).unwrap();
-        });
+        let handle = start_server(tx);
 
         loop {
             select! {
@@ -377,7 +381,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
         }
 
         // send message to stop server
-        send_message_to_stream(b" ")?;
+        send_message_to_server(b" ")?;
 
         handle.join().unwrap();
     }
