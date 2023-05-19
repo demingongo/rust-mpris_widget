@@ -201,7 +201,28 @@ fn send_message_to_stream(message: &[u8]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn do_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
+/// Executes the action
+pub fn exec_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
+    let cmd_path = env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"));
+    let mut binding = Command::new(cmd_path);
+    let mut command = binding.arg(action_name);
+
+    if !player.is_empty() {
+        command = command.arg("--player").arg(player);
+    }
+
+    let output = command.output()?;
+
+    // error if exit code is not 0
+    if Some(0) != output.status.code() {
+        // must return Err("")? (try! like) or Err("".into()) (less confusing)
+        return Err(String::from_utf8(output.stderr).unwrap().into());
+    }
+    Ok(())
+}
+
+/// Sends a command to the server or executes the action as a fallback
+pub fn send_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
     if action_name.eq("select") {
         if player.is_empty() {
             return Err("'select' command needs another argument (name of the player)".into());
@@ -210,20 +231,13 @@ pub fn do_action(action_name: &String, player: &String) -> Result<(), Box<dyn Er
         let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
         send_message_to_stream(message.as_slice())?;
     } else {
-        let cmd_path = env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"));
-        let mut binding = Command::new(cmd_path);
-        let mut command = binding.arg(action_name);
+        // try to send message to server
+        let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
+        let result = send_message_to_stream(message.as_slice());
 
-        if !player.is_empty() {
-            command = command.arg("--player").arg(player);
-        }
-
-        let output = command.output()?;
-
-        // error if exit code is not 0
-        if Some(0) != output.status.code() {
-            // must return Err("")? (try! like) or Err("".into()) (less confusing)
-            return Err(String::from_utf8(output.stderr).unwrap().into());
+        // fallback, execute the action
+        if let Err(_) = result {
+            exec_action(action_name, player)?;
         }
     }
 
@@ -244,14 +258,14 @@ fn parse_stream_message(mut stream: UnixStream) -> Option<StreamMessage> {
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
         // do action
-        do_action(&config.action, &config.player)?;
+        send_action(&config.action, &config.player)?;
     } else {
         let ctrl_c_events = ctrl_channel()?;
         let ticks = tick(Duration::from_secs(1));
         let mut current_display = String::new();
         let mut current_player: String = String::new();
 
-        let (tx, rx): (std::sync::mpsc::Sender<String>, std::sync::mpsc::Receiver<String>) = std::sync::mpsc::channel();
+        let (tx, rx): (std::sync::mpsc::Sender<StreamMessage>, std::sync::mpsc::Receiver<StreamMessage>) = std::sync::mpsc::channel();
 
         let handle = thread::spawn(move || {
             // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
@@ -281,10 +295,9 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                 if stream_message.is_empty() {
                                     // message is empty so we are done here
                                     break;
-                                } else if stream_message.action.eq("select") {
-                                    // send info to main thread
-                                    let _ = tx.send(stream_message.player);
                                 }
+                                // send info to main thread
+                                let _ = tx.send(stream_message);
                             } else {
                                 // we are done here
                                 break;
@@ -305,9 +318,16 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
             select! {
                 recv(ticks) -> _ => {
                     match rx.try_recv() {
-                        Ok(player_name) => {
-                            // changing player
-                            current_player = player_name;
+                        Ok(message) => {
+                            if message.action.eq("select") {
+                                // changing player
+                                current_player = message.player;
+                            } else {
+                                let result = exec_action(&message.action, &current_player);
+                                if let Err(err) = result {
+                                    eprintln!("Error (exec_action): {err:?}");
+                                }
+                            }
                         }
                         Err(_) => {}
                     }
