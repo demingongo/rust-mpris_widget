@@ -9,7 +9,7 @@ mod tests {
         let action: String = String::from("play-pause");
         let player = String::new();
 
-        let result = send_action(&action, &player);
+        let result = tokio_test::block_on(send_action(&action, &player));
         // let result = mpris_widget::exec_action(&action, &player);
 
         if let Err(error) = result {
@@ -35,7 +35,19 @@ mod tests {
         let action: String = String::from("select");
         let player = String::from("elisa");
 
-        let result = send_action(&action, &player);
+        let result = tokio_test::block_on(send_action(&action, &player));
+
+        if let Err(error) = result {
+            assert!(false, "'send_action' error: {}", error);
+        }
+    }
+
+    #[test]
+    fn list_command() {
+        let action: String = String::from("list");
+        let player = String::new();
+
+        let result = tokio_test::block_on(send_action(&action, &player));
 
         if let Err(error) = result {
             assert!(false, "'send_action' error: {}", error);

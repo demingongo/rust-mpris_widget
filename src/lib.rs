@@ -141,6 +141,51 @@ fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
     Ok(receiver)
 }
 
+async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
+    let cmd_path =
+        env::var("PLAYERS_METADATA_PATH").unwrap_or_else(|_| String::from(LIST_PLAYERS_CMD));
+    let output = Command::new("sh").arg("-c").arg(cmd_path).output()?;
+
+    let output_string = String::from_utf8(output.stdout).unwrap();
+
+    //println!("output is {}", output_string);
+
+    let players_list: Vec<&str> = output_string.split("\n").collect();
+
+    let mut players: Vec<PlayerMetadata> = vec![];
+
+    for data in players_list {
+        if data.len() < 1 {
+            break;
+        }
+
+        let metadata: Vec<&str> = data.split(";").collect();
+
+        let formatted_data = PlayerMetadata::create(
+            match metadata.get(6) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract player's name".into()),
+            },
+            match metadata.get(0) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract player's state".into()),
+            },
+            match metadata.get(1) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract artist".into()),
+            },
+            match metadata.get(2) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            },
+        );
+
+        players.push(formatted_data);
+    }
+
+    Ok(players)
+}
+
 async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<PlayerMetadata>, String), Box<dyn Error>> {
     let cmd_path =
         env::var("PLAYERS_METADATA_PATH").unwrap_or_else(|_| String::from(LIST_PLAYERS_CMD));
@@ -221,8 +266,9 @@ pub fn exec_action(action_name: &String, player: &String) -> Result<(), Box<dyn 
     Ok(())
 }
 
-/// Sends a command to the server or executes the action as a fallback
-pub fn send_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
+/// Sends a command to the server or executes the action as a fallback.
+/// If action_name == "list", it returns a list of metadata.
+pub async fn send_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
     if action_name.eq("select") {
         if player.is_empty() {
             return Err("'select' command needs another argument (name of the player)".into());
@@ -230,6 +276,43 @@ pub fn send_action(action_name: &String, player: &String) -> Result<(), Box<dyn 
         // send message to select a player on the server
         let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
         send_message_to_server(message.as_slice())?;
+    } else if action_name.eq("list") {
+        let data_list = fetch_list().await?;
+        let mut output = String::from("[");
+
+        for data in data_list.iter() {
+
+            let text = data.get_display();
+            let player_name = &data.player;
+
+            output.push_str("{");
+            // text
+            output.push_str("\"text\": ");
+            output.push_str((String::new() + "\"" + text.as_str() + "\"").as_str());
+            output.push_str(",");
+            // class
+            output.push_str(" \"class\": ");
+            output.push_str((String::new() + "\"custom-" + player_name.as_str() + "\"").as_str());
+            output.push_str(",");
+            // alt
+            output.push_str(" \"alt\": ");
+            output.push_str((String::new() + "\"" + player_name.as_str() + "\"").as_str());
+            output.push_str(",");
+            // tooltip
+            output.push_str(" \"tooltip\": ");
+            output.push_str((String::new() + "\"" + text.as_str() + "\"").as_str());
+
+            output.push_str("},");
+        }
+
+        // remove the last comma
+        if data_list.len() > 0 {
+            output.pop();
+        }
+
+        output.push_str("]");
+
+        println!("{}", output);
     } else {
         // try to send message to server
         let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
@@ -307,7 +390,7 @@ fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>) -> JoinHandle<()> {
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
         // do action
-        send_action(&config.action, &config.player)?;
+        send_action(&config.action, &config.player).await?;
     } else {
         let ctrl_c_events = ctrl_channel()?;
         let ticks = tick(Duration::from_secs(1));
