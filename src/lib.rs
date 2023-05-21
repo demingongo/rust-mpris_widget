@@ -5,6 +5,9 @@ use tokio::time::Duration;
 const LIST_PLAYERS_CMD: &str =
     "~/Documents/Github/awesomewm-mpris-widget/bin/list_players_metadata";
 
+const DEFAULT_OUTPUT_FILE: &str =
+    "$HOME/.local/share/mpris-widget/output.txt";
+
 const SOCK_PATH: &str = "/tmp/mpris_widget.sock";
 
 #[derive(Debug)]
@@ -48,6 +51,7 @@ pub struct Config {
     action: String,
     player: String,
     no_server: bool,
+    from_output_file: bool,
 }
 
 impl Config {
@@ -83,14 +87,17 @@ impl Config {
         };
 
         let mut no_server = false;
+        let mut from_output_file = false;
 
         for arg in options_iter {
             if arg.starts_with("--no-server") {
                 no_server = true;
+            } else if arg.starts_with("--from-output-file") {
+                from_output_file = true;
             }
         }
 
-        Ok(Config { action, player, no_server })
+        Ok(Config { action, player, no_server, from_output_file })
     }
 }
 
@@ -157,6 +164,21 @@ impl PlayerMetadata {
     }
 }
 
+pub fn get_playerctl_cmd() -> String {
+    env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"))
+}
+
+pub fn get_players_metadata_cmd() -> String {
+    env::var("PLAYERS_METADATA_PATH").unwrap_or_else(|_| String::from(LIST_PLAYERS_CMD))
+}
+
+pub fn get_output_file_path() -> String {
+    let mut options = envmnt::ExpandOptions::new();
+    options.expansion_type = Some(envmnt::ExpansionType::Unix);
+    let parsed_default = envmnt::expand(DEFAULT_OUTPUT_FILE, Some(options));
+    env::var("MPRIS_OUTPUT_FILE").unwrap_or_else(|_| String::from(parsed_default))
+}
+
 fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
     let (sender, receiver) = bounded(100);
     ctrlc::set_handler(move || {
@@ -167,8 +189,7 @@ fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
 }
 
 async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
-    let cmd_path =
-        env::var("PLAYERS_METADATA_PATH").unwrap_or_else(|_| String::from(LIST_PLAYERS_CMD));
+    let cmd_path = get_players_metadata_cmd();
     let output = Command::new("sh").arg("-c").arg(cmd_path).output()?;
 
     let output_string = String::from_utf8(output.stdout).unwrap();
@@ -212,8 +233,7 @@ async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
 }
 
 async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<PlayerMetadata>, String), Box<dyn Error>> {
-    let cmd_path =
-        env::var("PLAYERS_METADATA_PATH").unwrap_or_else(|_| String::from(LIST_PLAYERS_CMD));
+    let cmd_path = get_players_metadata_cmd();
     let output = Command::new("sh").arg("-c").arg(cmd_path).output()?;
 
     let output_string = String::from_utf8(output.stdout).unwrap();
@@ -272,13 +292,26 @@ fn send_message_to_server(message: &[u8]) -> Result<(), Box<dyn Error>> {
 }
 
 /// Executes the action
-pub fn exec_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
-    let cmd_path = env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"));
+pub fn exec_action(action_name: &String, player: &String, from_output_file: bool) -> Result<(), Box<dyn Error>> {
+    let cmd_path = get_playerctl_cmd();
     let mut binding = Command::new(cmd_path);
     let mut command = binding.arg(action_name);
 
     if !player.is_empty() {
+        // get name of the player from argument
         command = command.arg("--player").arg(player);
+    } else if from_output_file {
+        // get name of the current player from output file
+        let output_file = get_output_file_path();
+        if !output_file.is_empty() {
+            let output_file_content = match read_first_line(&output_file) {
+                Ok(v) => v,
+                Err(_) => String::new()
+            };
+            if !output_file_content.is_empty() {
+                command = command.arg("--player").arg(output_file_content);
+            }
+        }
     }
 
     let output = command.output()?;
@@ -293,7 +326,7 @@ pub fn exec_action(action_name: &String, player: &String) -> Result<(), Box<dyn 
 
 /// Sends a command to the server or executes the action as a fallback.
 /// If action_name == "list", it returns a list of metadata.
-pub async fn send_action(action_name: &String, player: &String, no_server: bool) -> Result<(), Box<dyn Error>> {
+pub async fn send_action(action_name: &String, player: &String, no_server: bool, from_output_file: bool) -> Result<(), Box<dyn Error>> {
     if action_name.eq("select") {
         if player.is_empty() {
             return Err("'select' command needs another argument (name of the player)".into());
@@ -341,14 +374,14 @@ pub async fn send_action(action_name: &String, player: &String, no_server: bool)
     } else {
         // try to send message to server
         if no_server {
-            exec_action(action_name, player)?;
+            exec_action(action_name, player, from_output_file)?;
         } else {
             let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
             let result = send_message_to_server(message.as_slice());
 
             // fallback, execute the action
             if let Err(_) = result {
-                exec_action(action_name, player)?;
+                exec_action(action_name, player, from_output_file)?;
             }
         }
         
@@ -393,6 +426,11 @@ pub fn read_first_line(file_path: &String) -> Result<String, Box<dyn Error>> {
             String::new()
         }
     )
+}
+
+fn write_to_file(file_path: &String, content: &String) -> Result<(), Box<dyn Error>> {
+    fs::write(file_path, content)?;
+    Ok(())
 }
 
 fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool) -> JoinHandle<()> {
@@ -452,7 +490,7 @@ fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool) -> 
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
         // do action
-        send_action(&config.action, &config.player, config.no_server).await?;
+        send_action(&config.action, &config.player, config.no_server, config.from_output_file).await?;
     } else {
         let ctrl_c_events = ctrl_channel()?;
         let ticks = tick(Duration::from_secs(1));
@@ -466,13 +504,17 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
         loop {
             select! {
                 recv(ticks) -> _ => {
+                    let mut it_should_print = false;
+                    let mut it_should_update_output_file = false;
+
                     match rx.try_recv() {
                         Ok(message) => {
                             if message.action.eq("select") {
                                 // changing player
                                 current_player = message.player;
+                                it_should_update_output_file = true;
                             } else {
-                                let result = exec_action(&message.action, &current_player);
+                                let result = exec_action(&message.action, &current_player, false);
                                 if let Err(err) = result {
                                     eprintln!("Error (exec_action): {err:?}");
                                 }
@@ -489,8 +531,6 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         break;
                     }
 
-                    let mut it_should_print = false;
-
                     // text to display
                     if !current_display.eq(&text) {
                         current_display = text;
@@ -502,7 +542,12 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         if !current_player.eq(&value.player) {
                             current_player = value.player;
                             it_should_print = true;
+                            it_should_update_output_file = true;
                         }
+                    } else if !current_player.is_empty() {
+                        current_player = String::new();
+                        it_should_print = true;
+                        it_should_update_output_file = true;
                     }
 
                     // print
@@ -516,10 +561,31 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                             );
                         }
                     }
+
+                    if it_should_update_output_file && config.from_output_file {
+                        let output_file = get_output_file_path();
+                        if !output_file.is_empty() {
+                            // write name of player into the file
+                            if let Err(err) = write_to_file(&output_file, &current_player) {
+                                eprintln!("write_to_file error: {} => {}", output_file, err);
+                            }
+                        }
+                    }
                 }
                 recv(ctrl_c_events) -> _ => {
                     // quit
+
+                    // cleanup default output
                     println!();
+                    
+                    // clean up output file
+                    let output_file = get_output_file_path();
+                    if !output_file.is_empty() && config.from_output_file {
+                        if let Err(err) = write_to_file(&output_file, &String::new()) {
+                            eprintln!("write_to_file error: {} => {}", output_file, err);
+                        }
+                    }
+
                     break;
                 }
             }
