@@ -1,5 +1,5 @@
 use crossbeam_channel::{bounded, select, tick, Receiver};
-use std::{env, error::Error, process::Command, os::unix::net::{UnixStream, UnixListener}, thread::{self, JoinHandle}, io::Write};
+use std::{env, error::Error, process::Command, os::unix::net::{UnixStream, UnixListener}, thread::{self, JoinHandle}, io::{Write, Read}, fs};
 use tokio::time::Duration;
 
 const LIST_PLAYERS_CMD: &str =
@@ -47,6 +47,7 @@ impl StreamMessage {
 pub struct Config {
     action: String,
     player: String,
+    no_server: bool,
 }
 
 impl Config {
@@ -54,18 +55,42 @@ impl Config {
         // unnecessary first arg
         args.next();
 
+        let mut extracted_args: Vec<String> = vec![];
+        let mut options: Vec<String> = vec![];
+
+        for arg in args {
+            if arg.starts_with("--") {
+                // it's an optional argument
+                options.push(arg);
+            } else {
+                // it's an argument
+                extracted_args.push(arg);
+            }
+        }
+
+        let mut extracted_args_iter = extracted_args.into_iter();
+        let options_iter = options.into_iter();
+
         // play_pause, previous, next, select
-        let action = match args.next() {
+        let action = match extracted_args_iter.next() {
             Some(v) => v,
-            None => String::from(""), // arguments are optional so do not return Err
+            None => String::new(), // arguments are optional so do not return Err
         };
         // e.g.: spotify, musikcube, ...
-        let player = match args.next() {
+        let player = match extracted_args_iter.next() {
             Some(v) => v,
-            None => String::from(""), // arguments are optional so do not return Err
+            None => String::new(), // arguments are optional so do not return Err
         };
 
-        Ok(Config { action, player })
+        let mut no_server = false;
+
+        for arg in options_iter {
+            if arg.starts_with("--no-server") {
+                no_server = true;
+            }
+        }
+
+        Ok(Config { action, player, no_server })
     }
 }
 
@@ -268,7 +293,7 @@ pub fn exec_action(action_name: &String, player: &String) -> Result<(), Box<dyn 
 
 /// Sends a command to the server or executes the action as a fallback.
 /// If action_name == "list", it returns a list of metadata.
-pub async fn send_action(action_name: &String, player: &String) -> Result<(), Box<dyn Error>> {
+pub async fn send_action(action_name: &String, player: &String, no_server: bool) -> Result<(), Box<dyn Error>> {
     if action_name.eq("select") {
         if player.is_empty() {
             return Err("'select' command needs another argument (name of the player)".into());
@@ -315,13 +340,18 @@ pub async fn send_action(action_name: &String, player: &String) -> Result<(), Bo
         println!("{}", output);
     } else {
         // try to send message to server
-        let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
-        let result = send_message_to_server(message.as_slice());
-
-        // fallback, execute the action
-        if let Err(_) = result {
+        if no_server {
             exec_action(action_name, player)?;
+        } else {
+            let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
+            let result = send_message_to_server(message.as_slice());
+
+            // fallback, execute the action
+            if let Err(_) = result {
+                exec_action(action_name, player)?;
+            }
         }
+        
     }
 
     Ok(())
@@ -338,8 +368,40 @@ fn parse_stream_message(mut stream: UnixStream) -> Option<StreamMessage> {
     }
 }
 
-fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>) -> JoinHandle<()> {
+fn get_first_line<R>(mut rdr: R) -> Result<String, Box<dyn Error>>
+    where R: std::io::BufRead,
+{
+    let mut first_line = String::new();
+
+    rdr.read_line(&mut first_line)?;
+
+    // Trim the leading hashes and any whitespace
+    Ok(first_line)
+}
+
+pub fn read_first_line(file_path: &String) -> Result<String, Box<dyn Error>> {
+    let file = fs::File::open(file_path)?;
+    let buffer = std::io::BufReader::new(file)
+        .take(256); // limit number of bytes to be read before returning EOF
+
+    let first_line = get_first_line(buffer)?;
+
+    Ok(
+        if let Some(v) = first_line.split("\n").next() {
+            String::from(v) // removed next line
+        } else {
+            String::new()
+        }
+    )
+}
+
+fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool) -> JoinHandle<()> {
     thread::spawn(move || {
+        if no_server {
+            // end thread here
+            return;
+        }
+
         // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
         let listener = match UnixListener::bind(SOCK_PATH) {
             Ok(sock) => {
@@ -390,7 +452,7 @@ fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>) -> JoinHandle<()> {
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
         // do action
-        send_action(&config.action, &config.player).await?;
+        send_action(&config.action, &config.player, config.no_server).await?;
     } else {
         let ctrl_c_events = ctrl_channel()?;
         let ticks = tick(Duration::from_secs(1));
@@ -399,7 +461,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
         let (tx, rx): (std::sync::mpsc::Sender<StreamMessage>, std::sync::mpsc::Receiver<StreamMessage>) = std::sync::mpsc::channel();
 
-        let handle = start_server(tx);
+        let handle = start_server(tx, config.no_server);
 
         loop {
             select! {
@@ -463,8 +525,10 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
             }
         }
 
-        // send message to stop server
-        send_message_to_server(b" ")?;
+        if !config.no_server {
+            // send message to stop server
+            send_message_to_server(b" ")?;
+        }
 
         handle.join().unwrap();
     }
