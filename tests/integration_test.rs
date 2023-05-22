@@ -9,7 +9,7 @@ mod tests {
         let action: String = String::from("play-pause");
         let player = String::new();
 
-        let result = tokio_test::block_on(send_action(&action, &player, true, true));
+        let result = tokio_test::block_on(send_action(&action, &player, false, false));
         // let result = mpris_widget::exec_action(&action, &player);
 
         if let Err(error) = result {

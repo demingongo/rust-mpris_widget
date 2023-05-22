@@ -17,6 +17,13 @@ enum State {
     Stopped,
 }
 
+
+pub struct InfoResponse {
+    code: i32,
+    display: String,
+    player: String,
+}
+
 #[derive(Debug)]
 pub struct StreamMessage {
     action: String,
@@ -487,13 +494,36 @@ fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool) -> 
     })
 }
 
+async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Error>> {
+    let mut new_player = String::new();
+    
+    // fetch data
+    let (code, metadata, text) = fetch_data(current_player).await?;
+
+    // something happened while trying to fetch data
+    if let Some(v) = code {
+        if v != 0 {
+            return Ok(InfoResponse { code: v, player: new_player, display: text });
+        }
+    }
+
+    // player to display/control
+    if let Some(value) = metadata {
+        new_player = value.player;
+    }
+    
+    Ok(InfoResponse { code: 0, player: new_player, display: text })
+}
+
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
         // do action
         send_action(&config.action, &config.player, config.no_server, config.from_output_file).await?;
     } else {
         let ctrl_c_events = ctrl_channel()?;
-        let ticks = tick(Duration::from_secs(1));
+        let refresh_ticks = tick(Duration::from_secs(1));
+        let stream_listener_ticks = tick(Duration::from_millis(300));
+
         let mut current_display = String::new();
         let mut current_player: String = String::new();
 
@@ -503,49 +533,84 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
         loop {
             select! {
-                recv(ticks) -> _ => {
-                    let mut it_should_print = false;
-                    let mut it_should_update_output_file = false;
-
+                recv(stream_listener_ticks) -> _ => {
+                    let mut received_message = false;
+                    
+                    // check received stream messages
                     match rx.try_recv() {
                         Ok(message) => {
                             if message.action.eq("select") {
                                 // changing player
                                 current_player = message.player;
-                                it_should_update_output_file = true;
+                                received_message = true;
                             } else {
                                 let result = exec_action(&message.action, &current_player, false);
                                 if let Err(err) = result {
                                     eprintln!("Error (exec_action): {err:?}");
+                                } else {
+                                    received_message = true;
                                 }
                             }
                         }
                         Err(_) => {}
                     }
 
-                    // fetch data
-                    let (code, metadata, text) = fetch_data(& current_player).await?;
+                    if received_message {
 
-                    // something happened while trying to fetch data
-                    if code != Some(0) {
+                        let info = fetch_info(&current_player).await?;
+
+                        if info.code != 0 {
+                            break;
+                        }
+
+                        // text to display
+                        if !current_display.eq(&info.display) {
+                            current_display = info.display;
+                        }
+
+                        if !current_player.eq(&info.player) {
+                            current_player = info.player;
+                        }
+
+                        // print
+                        if current_display.is_empty() {
+                            println!("{}", current_display);
+                        } else {
+                            println!(
+                                "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
+                                current_display, current_player, current_player, current_player, current_display
+                            );
+                        }
+
+                        if config.from_output_file {
+                            let output_file = get_output_file_path();
+                            if !output_file.is_empty() {
+                                // write name of player into the file
+                                if let Err(err) = write_to_file(&output_file, &current_player) {
+                                    eprintln!("write_to_file error: {} => {}", output_file, err);
+                                }
+                            }
+                        }
+                    }
+                }
+                recv(refresh_ticks) -> _ => {
+                    let mut it_should_print = false;
+                    let mut it_should_update_output_file = false;
+
+                    let info = fetch_info(&current_player).await?;
+
+                    if info.code != 0 {
                         break;
                     }
 
                     // text to display
-                    if !current_display.eq(&text) {
-                        current_display = text;
+                    if !current_display.eq(&info.display) {
+                        current_display = info.display;
                         it_should_print = true;
                     }
 
-                    // player to display/control
-                    if let Some(value) = metadata {
-                        if !current_player.eq(&value.player) {
-                            current_player = value.player;
-                            it_should_print = true;
-                            it_should_update_output_file = true;
-                        }
-                    } else if !current_player.is_empty() {
-                        current_player = String::new();
+                    if !current_player.eq(&info.player) {
+                        current_player = info.player;
                         it_should_print = true;
                         it_should_update_output_file = true;
                     }
