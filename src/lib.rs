@@ -22,6 +22,10 @@ pub struct InfoResponse {
     code: i32,
     display: String,
     player: String,
+    //artist: String,
+    //title: String,
+    //art_url: String,
+    //album: String
 }
 
 #[derive(Debug)]
@@ -113,8 +117,8 @@ pub struct PlayerMetadata {
     state: State,
     artist: String,
     title: String,
-    //art_url: String,
-    //album: String,
+    art_url: String,
+    album: String,
     player: String,
 
     separator: String,
@@ -124,7 +128,7 @@ pub struct PlayerMetadata {
 }
 
 impl PlayerMetadata {
-    fn create(player: &str, state: &str, artist: &str, title: &str) -> Self {
+    fn create(player: &str, state: &str, artist: &str, title: &str, album: &str, art_url: &str) -> Self {
         let player_state: State;
         if state == "Playing" {
             player_state = State::Playing;
@@ -137,8 +141,8 @@ impl PlayerMetadata {
             state: player_state,
             artist: String::from(artist),
             title: String::from(title),
-            //art_url:    String::from(art_url),
-            //album:      String::from(album),
+            art_url:    String::from(art_url),
+            album:      String::from(album),
             player: String::from(player),
 
             separator: String::from(" - "),
@@ -231,6 +235,14 @@ async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
                 Some(value) => value.trim(),
                 _ => return Err("Could not extract title".into()),
             },
+            match metadata.get(4) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            },
+            match metadata.get(3) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            }
         );
 
         players.push(formatted_data);
@@ -276,6 +288,14 @@ async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<Pla
                 Some(value) => value.trim(),
                 _ => return Err("Could not extract title".into()),
             },
+            match metadata.get(4) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            },
+            match metadata.get(3) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            }
         );
 
         let is_selected_player = formatted_data.player.eq(selected_player);
@@ -363,9 +383,30 @@ pub async fn send_action(action_name: &String, player: &String, no_server: bool,
             output.push_str(" \"alt\": ");
             output.push_str((String::new() + "\"" + player_name.as_str() + "\"").as_str());
             output.push_str(",");
-            // tooltip
-            output.push_str(" \"tooltip\": ");
-            output.push_str((String::new() + "\"" + text.as_str() + "\"").as_str());
+
+            // artist
+            output.push_str(" \"artist\": ");
+            output.push_str((String::new() + "\"" + data.artist.as_str() + "\"").as_str());
+            output.push_str(",");
+
+            // title
+            output.push_str(" \"title\": ");
+            output.push_str((String::new() + "\"" + data.title.as_str() + "\"").as_str());
+            output.push_str(",");
+
+            // album
+            output.push_str(" \"album\": ");
+            output.push_str((String::new() + "\"" + data.album.as_str() + "\"").as_str());
+            output.push_str(",");
+
+            // art_url
+            output.push_str(" \"art_url\": ");
+            output.push_str((String::new() + "\"" + data.art_url.as_str() + "\"").as_str());
+            //output.push_str(",");
+
+            //// tooltip
+            //output.push_str(" \"tooltip\": ");
+            //output.push_str((String::new() + "\"" + text.as_str() + "\"").as_str());
 
             output.push_str("},");
         }
@@ -496,6 +537,10 @@ fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool) -> 
 
 async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Error>> {
     let mut new_player = String::new();
+    //let mut art_url = String::new();
+    //let mut artist = String::new();
+    //let mut album = String::new();
+    //let mut title = String::new();
     
     // fetch data
     let (code, metadata, text) = fetch_data(current_player).await?;
@@ -503,16 +548,24 @@ async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Err
     // something happened while trying to fetch data
     if let Some(v) = code {
         if v != 0 {
-            return Ok(InfoResponse { code: v, player: new_player, display: text });
+            return Ok(InfoResponse { code: v, player: new_player, display: text, 
+                //art_url, album, artist, title 
+            });
         }
     }
 
     // player to display/control
     if let Some(value) = metadata {
         new_player = value.player;
+        //art_url = value.art_url;
+        //album = value.album;
+        //artist = value.artist;
+        //title = value.title;
     }
     
-    Ok(InfoResponse { code: 0, player: new_player, display: text })
+    Ok(InfoResponse { code: 0, player: new_player, display: text, 
+        //art_url, album, artist, title 
+    })
 }
 
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
