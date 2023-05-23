@@ -197,16 +197,22 @@ impl PlayerMetadata {
         };
 
         if !self.artist.is_empty() {
-            result.push_str(state_display);
             if self.player != "mpv" {
                 result.push_str(&self.artist);
                 result.push_str(&self.separator);
             }
             result.push_str(&self.title);
         } else {
-            result.push_str(state_display);
             result.push_str(&self.title);
         }
+
+        // if empty, display player's name
+        if result.is_empty() {
+            result.push_str(&self.player);
+        }
+
+        // prepend state
+        result = state_display.to_owned() + result.as_str();
 
         result
     }
