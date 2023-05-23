@@ -1,5 +1,5 @@
 use crossbeam_channel::{bounded, select, tick, Receiver};
-use std::{env, error::Error, process::Command, os::unix::net::{UnixStream, UnixListener}, thread::{self, JoinHandle}, io::{Write, Read}, fs};
+use std::{env, error::Error, process::{Command, Output}, os::unix::net::{UnixStream, UnixListener}, thread::{self, JoinHandle}, io::{Write, Read}, fs};
 use tokio::time::Duration;
 
 const LIST_PLAYERS_CMD: &str = "list_players_metadata";
@@ -148,6 +148,37 @@ impl PlayerMetadata {
         }
     }
 
+    fn create_from_vec(metadata: &Vec<&str>) -> Result<Self, Box<dyn Error>> {
+        let result = Self::create(
+            match metadata.get(6) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract player's name".into()),
+            },
+            match metadata.get(0) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract player's state".into()),
+            },
+            match metadata.get(1) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract artist".into()),
+            },
+            match metadata.get(2) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            },
+            match metadata.get(4) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            },
+            match metadata.get(3) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract title".into()),
+            }
+        );
+
+        Ok(result)
+    }
+
     fn get_state_str(&self) -> &str {
         match self.state {
             State::Paused => "Paused",
@@ -209,13 +240,18 @@ fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
     Ok(receiver)
 }
 
-async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
+fn exec_get_players_metadata_cmd() -> Result<Output, Box<dyn Error>> {
     let cmd_path = get_players_metadata_cmd();
     let output = Command::new("sh").arg("-c").arg(cmd_path).output()?;
 
-    let output_string = String::from_utf8(output.stdout).unwrap();
+    Ok(output)
+}
 
-    //println!("output is {}", output_string);
+async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
+
+    let output = exec_get_players_metadata_cmd()?;
+
+    let output_string = String::from_utf8(output.stdout).unwrap();
 
     let players_list: Vec<&str> = output_string.split("\n").collect();
 
@@ -228,32 +264,7 @@ async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
 
         let metadata: Vec<&str> = data.split(";").collect();
 
-        let formatted_data = PlayerMetadata::create(
-            match metadata.get(6) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract player's name".into()),
-            },
-            match metadata.get(0) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract player's state".into()),
-            },
-            match metadata.get(1) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract artist".into()),
-            },
-            match metadata.get(2) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract title".into()),
-            },
-            match metadata.get(4) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract title".into()),
-            },
-            match metadata.get(3) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract title".into()),
-            }
-        );
+        let formatted_data = PlayerMetadata::create_from_vec(&metadata)?;
 
         players.push(formatted_data);
     }
@@ -262,12 +273,10 @@ async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
 }
 
 async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<PlayerMetadata>, String), Box<dyn Error>> {
-    let cmd_path = get_players_metadata_cmd();
-    let output = Command::new("sh").arg("-c").arg(cmd_path).output()?;
+
+    let output = exec_get_players_metadata_cmd()?;
 
     let output_string = String::from_utf8(output.stdout).unwrap();
-
-    //println!("output is {}", output_string);
 
     let players_list: Vec<&str> = output_string.split("\n").collect();
 
@@ -281,32 +290,7 @@ async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<Pla
 
         let metadata: Vec<&str> = data.split(";").collect();
 
-        let formatted_data = PlayerMetadata::create(
-            match metadata.get(6) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract player's name".into()),
-            },
-            match metadata.get(0) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract player's state".into()),
-            },
-            match metadata.get(1) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract artist".into()),
-            },
-            match metadata.get(2) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract title".into()),
-            },
-            match metadata.get(4) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract title".into()),
-            },
-            match metadata.get(3) {
-                Some(value) => value.trim(),
-                _ => return Err("Could not extract title".into()),
-            }
-        );
+        let formatted_data = PlayerMetadata::create_from_vec(&metadata)?;
 
         let is_selected_player = formatted_data.player.eq(selected_player);
 
@@ -361,6 +345,73 @@ pub fn exec_action(action_name: &String, player: &String, from_output_file: bool
     Ok(())
 }
 
+async fn exec_list_action() -> Result<(), Box<dyn Error>> {
+    let data_list = fetch_list().await?;
+    let mut output = String::from("[");
+
+    for data in data_list.iter() {
+
+        let text = data.get_display();
+        let player_name = &data.player;
+
+        output.push_str("{");
+        // text
+        output.push_str("\"text\": ");
+        output.push_str((String::new() + "\"" + escape(&text).as_str() + "\"").as_str());
+        output.push_str(",");
+        // class
+        output.push_str(" \"class\": ");
+        output.push_str((String::new() + "\"custom-" + player_name.as_str() + "\"").as_str());
+        output.push_str(",");
+        // alt
+        output.push_str(" \"alt\": ");
+        output.push_str((String::new() + "\"" + player_name.as_str() + "\"").as_str());
+        output.push_str(",");
+
+        // state
+        output.push_str(" \"state\": ");
+        output.push_str((String::new() + "\"" + data.get_state_str() + "\"").as_str());
+        output.push_str(",");
+
+        // artist
+        output.push_str(" \"artist\": ");
+        output.push_str((String::new() + "\"" + escape(&data.artist).as_str() + "\"").as_str());
+        output.push_str(",");
+
+        // title
+        output.push_str(" \"title\": ");
+        output.push_str((String::new() + "\"" + escape(&data.title).as_str() + "\"").as_str());
+        output.push_str(",");
+
+        // album
+        output.push_str(" \"album\": ");
+        output.push_str((String::new() + "\"" + escape(&data.album).as_str() + "\"").as_str());
+        output.push_str(",");
+
+        // art_url
+        output.push_str(" \"art_url\": ");
+        output.push_str((String::new() + "\"" + escape(&data.art_url).as_str() + "\"").as_str());
+        //output.push_str(",");
+
+        //// tooltip
+        //output.push_str(" \"tooltip\": ");
+        //output.push_str((String::new() + "\"" + text.as_str() + "\"").as_str());
+
+        output.push_str("},");
+    }
+
+    // remove the last comma
+    if data_list.len() > 0 {
+        output.pop();
+    }
+
+    output.push_str("]");
+
+    println!("{}", output);
+
+    Ok(())
+}
+
 /// Sends a command to the server or executes the action as a fallback.
 /// If action_name == "list", it returns a list of metadata.
 pub async fn send_action(action_name: &String, player: &String, no_server: bool, from_output_file: bool) -> Result<(), Box<dyn Error>> {
@@ -372,68 +423,7 @@ pub async fn send_action(action_name: &String, player: &String, no_server: bool,
         let message: Vec<u8> = [action_name.as_bytes(), b" ", player.as_bytes()].concat();
         send_message_to_server(message.as_slice())?;
     } else if action_name.eq("list") {
-        let data_list = fetch_list().await?;
-        let mut output = String::from("[");
-
-        for data in data_list.iter() {
-
-            let text = data.get_display();
-            let player_name = &data.player;
-
-            output.push_str("{");
-            // text
-            output.push_str("\"text\": ");
-            output.push_str((String::new() + "\"" + escape(&text).as_str() + "\"").as_str());
-            output.push_str(",");
-            // class
-            output.push_str(" \"class\": ");
-            output.push_str((String::new() + "\"custom-" + player_name.as_str() + "\"").as_str());
-            output.push_str(",");
-            // alt
-            output.push_str(" \"alt\": ");
-            output.push_str((String::new() + "\"" + player_name.as_str() + "\"").as_str());
-            output.push_str(",");
-
-            // state
-            output.push_str(" \"state\": ");
-            output.push_str((String::new() + "\"" + data.get_state_str() + "\"").as_str());
-            output.push_str(",");
-
-            // artist
-            output.push_str(" \"artist\": ");
-            output.push_str((String::new() + "\"" + escape(&data.artist).as_str() + "\"").as_str());
-            output.push_str(",");
-
-            // title
-            output.push_str(" \"title\": ");
-            output.push_str((String::new() + "\"" + escape(&data.title).as_str() + "\"").as_str());
-            output.push_str(",");
-
-            // album
-            output.push_str(" \"album\": ");
-            output.push_str((String::new() + "\"" + escape(&data.album).as_str() + "\"").as_str());
-            output.push_str(",");
-
-            // art_url
-            output.push_str(" \"art_url\": ");
-            output.push_str((String::new() + "\"" + escape(&data.art_url).as_str() + "\"").as_str());
-            //output.push_str(",");
-
-            //// tooltip
-            //output.push_str(" \"tooltip\": ");
-            //output.push_str((String::new() + "\"" + text.as_str() + "\"").as_str());
-
-            output.push_str("},");
-        }
-
-        // remove the last comma
-        if data_list.len() > 0 {
-            output.pop();
-        }
-
-        output.push_str("]");
-
-        println!("{}", output);
+        exec_list_action().await?;
     } else {
         // try to send message to server
         if no_server {
@@ -583,6 +573,19 @@ async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Err
     })
 }
 
+///
+/// Prints json element or empty string if first argument is empty
+fn print_one_json_element(text: &String, player: &String) {
+    if text.is_empty() {
+        println!("{}", text);
+    } else {
+        println!(
+            "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
+            escape(&text), player, player, player, escape(&text)
+        );
+    }
+}
+
 pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
     if !config.action.is_empty() {
         // do action
@@ -641,14 +644,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         }
 
                         // print
-                        if current_display.is_empty() {
-                            println!("{}", current_display);
-                        } else {
-                            println!(
-                                "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
-                                escape(&current_display), current_player, current_player, current_player, escape(&current_display)
-                            );
-                        }
+                        print_one_json_element(&current_display, &current_player);
 
                         if config.from_output_file {
                             let output_file = get_output_file_path();
@@ -685,14 +681,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
                     // print
                     if it_should_print {
-                        if current_display.is_empty() {
-                            println!("{}", current_display);
-                        } else {
-                            println!(
-                                "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
-                                escape(&current_display), current_player, current_player, current_player, escape(&current_display)
-                            );
-                        }
+                        print_one_json_element(&current_display, &current_player);
                     }
 
                     if it_should_update_output_file && config.from_output_file {
