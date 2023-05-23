@@ -2,8 +2,7 @@ use crossbeam_channel::{bounded, select, tick, Receiver};
 use std::{env, error::Error, process::Command, os::unix::net::{UnixStream, UnixListener}, thread::{self, JoinHandle}, io::{Write, Read}, fs};
 use tokio::time::Duration;
 
-const LIST_PLAYERS_CMD: &str =
-    "~/Documents/Github/awesomewm-mpris-widget/bin/list_players_metadata";
+const LIST_PLAYERS_CMD: &str = "list_players_metadata";
 
 const DEFAULT_OUTPUT_FILE: &str =
     "$HOME/.local/share/mpris-widget/output.txt";
