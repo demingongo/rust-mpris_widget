@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn select_player_command() {
         let action: String = String::from("select");
-        let player = String::from("elisa");
+        let player = String::from("mpv");
 
         let result = tokio_test::block_on(send_action(&action, &player, false, false));
 

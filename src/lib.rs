@@ -181,6 +181,10 @@ impl PlayerMetadata {
     }
 }
 
+pub fn escape(v: &String) -> String {
+    v.replace(r#"""#, r#"\""#)
+}
+
 pub fn get_playerctl_cmd() -> String {
     env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"))
 }
@@ -379,7 +383,7 @@ pub async fn send_action(action_name: &String, player: &String, no_server: bool,
             output.push_str("{");
             // text
             output.push_str("\"text\": ");
-            output.push_str((String::new() + "\"" + text.as_str() + "\"").as_str());
+            output.push_str((String::new() + "\"" + escape(&text).as_str() + "\"").as_str());
             output.push_str(",");
             // class
             output.push_str(" \"class\": ");
@@ -397,22 +401,22 @@ pub async fn send_action(action_name: &String, player: &String, no_server: bool,
 
             // artist
             output.push_str(" \"artist\": ");
-            output.push_str((String::new() + "\"" + data.artist.as_str() + "\"").as_str());
+            output.push_str((String::new() + "\"" + escape(&data.artist).as_str() + "\"").as_str());
             output.push_str(",");
 
             // title
             output.push_str(" \"title\": ");
-            output.push_str((String::new() + "\"" + data.title.as_str() + "\"").as_str());
+            output.push_str((String::new() + "\"" + escape(&data.title).as_str() + "\"").as_str());
             output.push_str(",");
 
             // album
             output.push_str(" \"album\": ");
-            output.push_str((String::new() + "\"" + data.album.as_str() + "\"").as_str());
+            output.push_str((String::new() + "\"" + escape(&data.album).as_str() + "\"").as_str());
             output.push_str(",");
 
             // art_url
             output.push_str(" \"art_url\": ");
-            output.push_str((String::new() + "\"" + data.art_url.as_str() + "\"").as_str());
+            output.push_str((String::new() + "\"" + escape(&data.art_url).as_str() + "\"").as_str());
             //output.push_str(",");
 
             //// tooltip
@@ -642,7 +646,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         } else {
                             println!(
                                 "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
-                                current_display, current_player, current_player, current_player, current_display
+                                escape(&current_display), current_player, current_player, current_player, escape(&current_display)
                             );
                         }
 
@@ -686,7 +690,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         } else {
                             println!(
                                 "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
-                                current_display, current_player, current_player, current_player, current_display
+                                escape(&current_display), current_player, current_player, current_player, escape(&current_display)
                             );
                         }
                     }
