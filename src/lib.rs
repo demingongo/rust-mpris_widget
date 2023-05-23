@@ -10,13 +10,6 @@ const DEFAULT_OUTPUT_FILE: &str =
 
 const SOCK_PATH: &str = "/tmp/mpris_widget.sock";
 
-#[derive(Debug)]
-enum State {
-    Playing,
-    Paused,
-    Stopped,
-}
-
 
 pub struct InfoResponse {
     code: i32,
@@ -113,6 +106,13 @@ impl Config {
 }
 
 #[derive(Debug)]
+enum State {
+    Playing,
+    Paused,
+    Stopped,
+}
+
+#[derive(Debug)]
 pub struct PlayerMetadata {
     state: State,
     artist: String,
@@ -152,6 +152,14 @@ impl PlayerMetadata {
         }
     }
 
+    fn get_state_str(&self) -> &str {
+        match self.state {
+            State::Paused => "Paused",
+            State::Playing => "Playing",
+            State::Stopped => "Stopped"
+        }
+    }
+
     fn get_display(&self) -> String {
         let mut result = String::from("");
 
@@ -163,8 +171,10 @@ impl PlayerMetadata {
 
         if !self.artist.is_empty() {
             result.push_str(state_display);
-            result.push_str(&self.artist);
-            result.push_str(&self.separator);
+            if self.player != "mpv" {
+                result.push_str(&self.artist);
+                result.push_str(&self.separator);
+            }
             result.push_str(&self.title);
         } else {
             result.push_str(state_display);
@@ -382,6 +392,11 @@ pub async fn send_action(action_name: &String, player: &String, no_server: bool,
             // alt
             output.push_str(" \"alt\": ");
             output.push_str((String::new() + "\"" + player_name.as_str() + "\"").as_str());
+            output.push_str(",");
+
+            // state
+            output.push_str(" \"state\": ");
+            output.push_str((String::new() + "\"" + data.get_state_str() + "\"").as_str());
             output.push_str(",");
 
             // artist
