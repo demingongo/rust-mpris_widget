@@ -20,7 +20,6 @@ pub struct InfoResponse {
     //album: String
 }
 
-#[derive(Debug)]
 pub struct StreamMessage {
     action: String,
     player: String,
@@ -104,14 +103,12 @@ impl Config {
     }
 }
 
-#[derive(Debug)]
 enum State {
     Playing,
     Paused,
     Stopped,
 }
 
-#[derive(Debug)]
 pub struct PlayerMetadata {
     state: State,
     artist: String,

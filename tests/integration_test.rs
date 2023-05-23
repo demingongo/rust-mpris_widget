@@ -56,14 +56,16 @@ mod tests {
 
     #[test]
     fn read_first_line_of_file() {
-        let file_path: String = String::from("$HOME/.local/share/mpris-widget/output.txt");
+        let file_path = String::from("./tests/output.txt");
+
+        let expected = "player_name";
 
         let result = read_first_line(&file_path);
 
         if let Err(error) = result {
             assert!(false, "'read_first_line' error: {}", error);
         } else if let Ok(v) = result {
-            println!("first line is '{}', lenght: {}", v, v.len());
+            assert!(v == expected, "first line was '{}', expected '{}'", v, expected);
         }
     }
 }
