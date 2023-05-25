@@ -222,6 +222,10 @@ pub fn escape(v: &String) -> String {
     v.replace(r#"""#, r#"\""#)
 }
 
+pub fn escape_ampersand(v: &String) -> String {
+    v.replace(r#"&"#, r#"&amp;"#)
+}
+
 pub fn get_playerctl_cmd() -> String {
     env::var("PLAYERCTL_PATH").unwrap_or_else(|_| String::from("playerctl"))
 }
@@ -587,7 +591,7 @@ fn print_one_json_element(text: &String, player: &String) {
     } else {
         println!(
             "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
-            escape(&text), player, player, player, escape(&text)
+            escape(&text), player, player, player, escape_ampersand(&escape(&text))
         );
     }
 }
