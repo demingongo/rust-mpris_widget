@@ -14,6 +14,7 @@ pub struct InfoResponse {
     code: i32,
     display: String,
     player: String,
+    state: String
     //artist: String,
     //title: String,
     //art_url: String,
@@ -552,6 +553,7 @@ fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool) -> 
 
 async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Error>> {
     let mut new_player = String::new();
+    let mut new_state = String::new();
     //let mut art_url = String::new();
     //let mut artist = String::new();
     //let mut album = String::new();
@@ -563,7 +565,7 @@ async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Err
     // something happened while trying to fetch data
     if let Some(v) = code {
         if v != 0 {
-            return Ok(InfoResponse { code: v, player: new_player, display: text, 
+            return Ok(InfoResponse { code: v, player: new_player, display: text, state: new_state
                 //art_url, album, artist, title 
             });
         }
@@ -571,6 +573,7 @@ async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Err
 
     // player to display/control
     if let Some(value) = metadata {
+        new_state = String::from(value.get_state_str());
         new_player = value.player;
         //art_url = value.art_url;
         //album = value.album;
@@ -578,20 +581,20 @@ async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Err
         //title = value.title;
     }
     
-    Ok(InfoResponse { code: 0, player: new_player, display: text, 
+    Ok(InfoResponse { code: 0, player: new_player, display: text, state: new_state
         //art_url, album, artist, title 
     })
 }
 
 ///
 /// Prints json element or empty string if first argument is empty
-fn print_one_json_element(text: &String, player: &String) {
+fn print_one_json_element(text: &String, player: &String, state: &String) {
     if text.is_empty() {
         println!("{}", text);
     } else {
         println!(
-            "{{\"text\": \"{}\", \"class\": \"custom-{}\", \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
-            escape(&text), player, player, player, escape_ampersand(&escape(&text))
+            "{{\"text\": \"{}\", \"class\": [\"custom-{}\", \"{}\"], \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
+            escape(&text), player, state.to_lowercase(), player, player, escape_ampersand(&escape(&text))
         );
     }
 }
@@ -654,7 +657,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         }
 
                         // print
-                        print_one_json_element(&current_display, &current_player);
+                        print_one_json_element(&current_display, &current_player, &info.state);
 
                         if config.from_output_file {
                             let output_file = get_output_file_path();
@@ -691,7 +694,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
                     // print
                     if it_should_print {
-                        print_one_json_element(&current_display, &current_player);
+                        print_one_json_element(&current_display, &current_player, &info.state);
                     }
 
                     if it_should_update_output_file && config.from_output_file {
