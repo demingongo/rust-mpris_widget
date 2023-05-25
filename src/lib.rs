@@ -55,6 +55,7 @@ pub struct Config {
     player: String,
     no_server: bool,
     from_output_file: bool,
+    force_clean_start: bool,
 }
 
 impl Config {
@@ -91,16 +92,19 @@ impl Config {
 
         let mut no_server = false;
         let mut from_output_file = false;
+        let mut force_clean_start = false;
 
         for arg in options_iter {
             if arg.starts_with("--no-server") {
                 no_server = true;
             } else if arg.starts_with("--from-output-file") {
                 from_output_file = true;
+            }  else if arg == "--clean-start" {
+                force_clean_start = true;
             }
         }
 
-        Ok(Config { action, player, no_server, from_output_file })
+        Ok(Config { action, player, no_server, from_output_file, force_clean_start })
     }
 }
 
@@ -497,11 +501,15 @@ fn write_to_file(file_path: &String, content: &String) -> Result<(), Box<dyn Err
     Ok(())
 }
 
-fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool) -> JoinHandle<()> {
+fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool, force_clean_start: bool) -> JoinHandle<()> {
     thread::spawn(move || {
         if no_server {
             // end thread here
             return;
+        }
+
+        if force_clean_start {
+            let _ = std::fs::remove_file(SOCK_PATH);
         }
 
         // listen to Unix socket (https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html)
@@ -613,7 +621,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
         let (tx, rx): (std::sync::mpsc::Sender<StreamMessage>, std::sync::mpsc::Receiver<StreamMessage>) = std::sync::mpsc::channel();
 
-        let handle = start_server(tx, config.no_server);
+        let handle = start_server(tx, config.no_server, config.force_clean_start);
 
         loop {
             select! {
