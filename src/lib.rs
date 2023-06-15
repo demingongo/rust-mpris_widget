@@ -601,8 +601,8 @@ fn print_one_json_element(text: &String, player: &String, state: &String) {
         println!("{}", text);
     } else {
         println!(
-            "{{\"text\": \"{}\", \"class\": [\"custom-{}\", \"{}\"], \"alt\": \"{}\", \"tooltip\": \"({}) {}\"}}",
-            escape(&text), player, state.to_lowercase(), player, player, escape_ampersand(&escape(&text))
+            "{{\"text\": \"{}\", \"class\": [\"custom-{}\", \"{}\"], \"alt\": \"{}\", \"tooltip\": \"({}) {}\", \"state\": \"{}\"}}",
+            escape(&text), player, state.to_lowercase(), player, player, escape_ampersand(&escape(&text)), state.to_lowercase()
         );
     }
 }
