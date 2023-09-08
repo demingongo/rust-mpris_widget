@@ -277,7 +277,7 @@ async fn fetch_list() -> Result<Vec<PlayerMetadata>, Box<dyn Error>> {
             break;
         }
 
-        let metadata: Vec<&str> = data.split(";").collect();
+        let metadata: Vec<&str> = data.split(" ;").collect();
 
         let formatted_data = PlayerMetadata::create_from_vec(&metadata)?;
 
