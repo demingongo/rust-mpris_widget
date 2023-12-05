@@ -14,7 +14,8 @@ pub struct InfoResponse {
     code: i32,
     display: String,
     player: String,
-    state: String
+    state: String,
+    instance: String
     //artist: String,
     //title: String,
     //art_url: String,
@@ -121,6 +122,7 @@ pub struct PlayerMetadata {
     art_url: String,
     album: String,
     player: String,
+    instance: String,
 
     separator: String,
     state_paused: String,
@@ -129,7 +131,7 @@ pub struct PlayerMetadata {
 }
 
 impl PlayerMetadata {
-    fn create(player: &str, state: &str, artist: &str, title: &str, album: &str, art_url: &str) -> Self {
+    fn create(player: &str, instance: &str, state: &str, artist: &str, title: &str, album: &str, art_url: &str) -> Self {
         let player_state: State;
         if state == "Playing" {
             player_state = State::Playing;
@@ -145,6 +147,7 @@ impl PlayerMetadata {
             art_url:    String::from(art_url),
             album:      String::from(album),
             player: String::from(player),
+            instance: String::from(instance),
 
             separator: String::from(" - "),
             state_paused: String::from(" "),
@@ -158,6 +161,10 @@ impl PlayerMetadata {
             match metadata.get(6) {
                 Some(value) => value.trim(),
                 _ => return Err("Could not extract player's name".into()),
+            },
+            match metadata.get(7) {
+                Some(value) => value.trim(),
+                _ => return Err("Could not extract instance's name".into()),
             },
             match metadata.get(0) {
                 Some(value) => value.trim(),
@@ -307,9 +314,10 @@ async fn fetch_data(selected_player: &String) -> Result<(Option<i32>, Option<Pla
 
         let formatted_data = PlayerMetadata::create_from_vec(&metadata)?;
 
-        let is_selected_player = formatted_data.player.eq(selected_player);
+        let is_selected_player = formatted_data.instance.eq(selected_player);
+        let is_selected_instance = formatted_data.instance.eq(selected_player);
 
-        if is_selected_player || first_player.is_none() {
+        if is_selected_player || is_selected_instance || first_player.is_none() {
             first_display = formatted_data.get_display();
             first_player = Some(formatted_data);
             if is_selected_player {
@@ -328,6 +336,12 @@ fn send_message_to_server(message: &[u8]) -> Result<(), Box<dyn Error>> {
 }
 
 /// Executes the action
+/// 
+/// # Arguments
+/// 
+/// * `action_name` - Command for playerctl (e.g.: play-pause, previous, next, ...)
+/// * `player` - Name of the player (e.g.: firefox) or instance (e.g.: firefox.instance3303).
+/// * `from_output_file` - If true and 'player' argument is empty, look for the player in a file.
 pub fn exec_action(action_name: &String, player: &String, from_output_file: bool) -> Result<(), Box<dyn Error>> {
     let cmd_path = get_playerctl_cmd();
     let mut binding = Command::new(cmd_path);
@@ -381,6 +395,11 @@ async fn exec_list_action() -> Result<(), Box<dyn Error>> {
         // alt
         output.push_str(" \"alt\": ");
         output.push_str((String::new() + "\"" + player_name.as_str() + "\"").as_str());
+        output.push_str(",");
+
+        // instance
+        output.push_str(" \"instance\": ");
+        output.push_str((String::new() + "\"" + escape(&data.instance).as_str() + "\"").as_str());
         output.push_str(",");
 
         // state
@@ -562,6 +581,7 @@ fn start_server(tx: std::sync::mpsc::Sender<StreamMessage>, no_server: bool, for
 async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Error>> {
     let mut new_player = String::new();
     let mut new_state = String::new();
+    let mut new_instance = String::new();
     //let mut art_url = String::new();
     //let mut artist = String::new();
     //let mut album = String::new();
@@ -573,7 +593,7 @@ async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Err
     // something happened while trying to fetch data
     if let Some(v) = code {
         if v != 0 {
-            return Ok(InfoResponse { code: v, player: new_player, display: text, state: new_state
+            return Ok(InfoResponse { code: v, player: new_player, display: text, state: new_state, instance: new_instance
                 //art_url, album, artist, title 
             });
         }
@@ -583,26 +603,27 @@ async fn fetch_info(current_player: &String) -> Result<InfoResponse, Box<dyn Err
     if let Some(value) = metadata {
         new_state = String::from(value.get_state_str());
         new_player = value.player;
+        new_instance = value.instance;
         //art_url = value.art_url;
         //album = value.album;
         //artist = value.artist;
         //title = value.title;
     }
     
-    Ok(InfoResponse { code: 0, player: new_player, display: text, state: new_state
+    Ok(InfoResponse { code: 0, player: new_player, display: text, state: new_state, instance: new_instance
         //art_url, album, artist, title 
     })
 }
 
 ///
 /// Prints json element or empty string if first argument is empty
-fn print_one_json_element(text: &String, player: &String, state: &String) {
+fn print_one_json_element(text: &String, player: &String, state: &String, instance: &String) {
     if text.is_empty() {
         println!("{}", text);
     } else {
         println!(
-            "{{\"text\": \"{}\", \"class\": [\"custom-{}\", \"{}\"], \"alt\": \"{}\", \"tooltip\": \"({}) {}\", \"state\": \"{}\"}}",
-            escape(&text), player, state.to_lowercase(), player, player, escape_ampersand(&escape(&text)), state.to_lowercase()
+            "{{\"text\": \"{}\", \"class\": [\"custom-{}\", \"{}\"], \"alt\": \"{}\", \"tooltip\": \"({}) {}\", \"state\": \"{}\", \"instance\": \"{}\"}}",
+            escape(&text), player, state.to_lowercase(), player, player, escape_ampersand(&escape(&text)), state.to_lowercase(), instance
         );
     }
 }
@@ -618,6 +639,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
         let mut current_display = String::new();
         let mut current_player: String = String::new();
+        let mut current_instance: String = String::new();
 
         let (tx, rx): (std::sync::mpsc::Sender<StreamMessage>, std::sync::mpsc::Receiver<StreamMessage>) = std::sync::mpsc::channel();
 
@@ -633,10 +655,11 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         Ok(message) => {
                             if message.action.eq("select") {
                                 // changing player
-                                current_player = message.player;
+                                current_player = String::from(&message.player);
+                                current_instance = message.player;
                                 received_message = true;
                             } else {
-                                let result = exec_action(&message.action, &current_player, false);
+                                let result = exec_action(&message.action, &current_instance, false);
                                 if let Err(err) = result {
                                     eprintln!("Error (exec_action): {err:?}");
                                 } else {
@@ -649,7 +672,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
                     if received_message {
 
-                        let info = fetch_info(&current_player).await?;
+                        let info = fetch_info(&current_instance).await?;
 
                         if info.code != 0 {
                             break;
@@ -664,8 +687,12 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                             current_player = info.player;
                         }
 
+                        if !current_instance.eq(&info.instance) {
+                            current_instance = info.instance;
+                        }
+
                         // print
-                        print_one_json_element(&current_display, &current_player, &info.state);
+                        print_one_json_element(&current_display, &current_player, &info.state, &current_instance);
 
                         if config.from_output_file {
                             let output_file = get_output_file_path();
@@ -682,7 +709,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                     let mut it_should_print = false;
                     let mut it_should_update_output_file = false;
 
-                    let info = fetch_info(&current_player).await?;
+                    let info = fetch_info(&current_instance).await?;
 
                     if info.code != 0 {
                         break;
@@ -700,9 +727,15 @@ pub async fn run(config: Config) -> Result<(), Box<dyn Error>> {
                         it_should_update_output_file = true;
                     }
 
+                    if !current_instance.eq(&info.instance) {
+                        current_instance = info.instance;
+                        it_should_print = true;
+                        it_should_update_output_file = true;
+                    }
+
                     // print
                     if it_should_print {
-                        print_one_json_element(&current_display, &current_player, &info.state);
+                        print_one_json_element(&current_display, &current_player, &info.state, &current_instance);
                     }
 
                     if it_should_update_output_file && config.from_output_file {
